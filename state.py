@@ -1,29 +1,38 @@
-from typing import TypedDict, List, Dict, Any
+from typing import TypedDict, List, Dict, Any, Optional
 
 
-class BrowserState(TypedDict):
+class BrowserState(TypedDict, total=False):
     goal: str
     start_url: str
-    title: str
 
-    # 📄 raw page (browser output)
+    # 📄 page output from browser
+    title: Optional[str]
+    url: Optional[str]
     page_content: List[Dict[str, Any]]
 
     # 🧩 chunked DOM
     chunks: List[Dict[str, Any]]
 
-    # 🔢 embeddings
+    # 🔢 vector store
     vector_db: Any
 
-    # 🔍 RAG retrieval output (NEW)
-    retrieved_context: List[str]
+    # 🔍 retrieval results (structured!)
+    retrieved_context: List[Dict[str, Any]]
 
-    # 🧠 query used for retrieval (NEW - optional but useful)
-    search_query: str
+    # 🧠 search query
+    search_query: Optional[str]
 
-    # 🧠 planner output (final AI decision)
-    plan: str
+    # 🧠 planner output (IMPORTANT: dict, not string)
+    plan: Dict[str, Any]
 
-    # 👀 optional evaluation step
-    review: str
-    result: str
+    # 👀 optional evaluation
+    review: Optional[str]
+
+    # 🎯 final result
+    result: Optional[Any]
+
+    # 🌐 runtime browser object (IMPORTANT)
+    browser: Any
+
+    # 📄 current page object (optional but useful)
+    page: Any

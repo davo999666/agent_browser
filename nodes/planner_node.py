@@ -1,6 +1,5 @@
-from typing import Dict, Any
 import json
-
+from typing import Dict, Any
 
 from chains.planner_chain import planner_chain, query_chain
 from tools.retriever import retrieve
@@ -16,10 +15,10 @@ def planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
     })
 
     # 🔍 2. retrieve relevant page data from vector DB
-    retrieved_chunks = retrieve(search_query, vector_db, k=10)
+    retrieved_chunks = retrieve(search_query, vector_db, k=20)
 
     # 📄 3. build context from retrieval
-    context = "\n".join(retrieved_chunks)
+    context = json.dumps(retrieved_chunks, ensure_ascii=False, indent=2)
 
     # 🧠 4. LLM makes final plan using retrieved info
     result = planner_chain.invoke({

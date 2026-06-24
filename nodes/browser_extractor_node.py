@@ -1,14 +1,15 @@
 from typing import Dict, Any
-from playwright.sync_api import sync_playwright
+
 
 
 # keep playwright globally inside workflow
-p = sync_playwright().start()
-browser = p.chromium.launch(headless=False)
+# p = sync_playwright().start()
+# browser = p.chromium.launch(headless=False)
 
 
 def browser_node(state: Dict[str, Any]) -> Dict[str, Any]:
     url = state["start_url"]
+    browser = state["browser"]
 
     page = browser.new_page()
 
@@ -215,10 +216,8 @@ def browser_node(state: Dict[str, Any]) -> Dict[str, Any]:
 }
 """)
 
-    page.close()
-
     return {
-        **state,
+        "page": page,
         "url": current_url,
         "page_content": {
                             "title": title,
@@ -227,10 +226,3 @@ def browser_node(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def close_browser(state):
-    global browser, p
-
-    browser.close()
-    p.stop()
-
-    return state

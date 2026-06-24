@@ -1,14 +1,16 @@
 import json
 
 from langgraph.graph import StateGraph, END
+
 from vector_store.faiss_db import create_vector_db
 
 from state import BrowserState
 
-from nodes.browser_extractor_node import browser_node, close_browser
+from nodes.browser_extractor_node import browser_node
 from nodes.chunk_node import chunk_node
 from nodes.embedding_nodes import embed_node
 from nodes.planner_node import planner_node
+from nodes.worker_node import worker_node
 # from agents.reviewer_agent import reviewer_node
 
 
@@ -23,27 +25,29 @@ class BrowserWorkflow:
         graph.add_node("chunker", chunk_node)
         graph.add_node("embedder", embed_node)
         graph.add_node("planner", planner_node)
-        graph.add_node("closer", close_browser)
+        graph.add_node("worker", worker_node)
 
         graph.set_entry_point("browser")
 
         graph.add_edge("browser", "chunker")
         graph.add_edge("chunker", "embedder")
         graph.add_edge("embedder", "planner")
-        graph.add_edge("planner", "closer")
-        graph.add_edge("closer", END)
+        graph.add_edge("planner", "worker")
+        graph.add_edge("worker", END)
+  
 
 
         self.app = graph.compile()
 
-    def run(self, goal: str, start_url: str):
+    def run(self, goal: str, start_url: str, browser):
 
         result = self.app.invoke(
-            {
+            {   
                 "goal": goal,
                 "start_url": start_url,
+                "browser": browser,
                 "page_content": "...",
-                "vector_db": self.vector_db
+                "vector_db": self.vector_db,
             }
         )
         page = result.get("page_content", {})
@@ -81,10 +85,8 @@ class BrowserWorkflow:
 
         
         # ---------------- RETRIEVED ----------------
-        with open("retrieved_context.txt", "w", encoding="utf-8") as f:
-            for i, item in enumerate(retrieved):
-                f.write(f"\n--- RETRIEVED {i+1} ---\n")
-                f.write(str(item) + "\n")
+        with open("retrieved_context.json", "w", encoding="utf-8") as f:
+            json.dump(retrieved, f, ensure_ascii=False, indent=2)
 
         # ---------------- QUERY ----------------
         with open("search_query.txt", "w", encoding="utf-8") as f:
