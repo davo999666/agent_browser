@@ -48,38 +48,47 @@ class BrowserWorkflow:
                 "vector_db": self.vector_db
             }
         )
+
         chunks = result.get("chunks", [])
         embeddings = result.get("embedding_nodes", [])
         retrieved = result.get("retrieved_context", [])
         search_query = result.get("search_query", "")
         plan = result.get("plan", "")
 
+        # 🔥 REMOVE NON-JSON OBJECTS
+        safe_result = dict(result)
+        safe_result.pop("vector_db", None)
+
+        # ---------------- OUTPUT JSON ----------------
         with open("output.json", "w", encoding="utf-8") as f:
-            json.dump(result, f, indent=2, ensure_ascii=False)
-        
+            json.dump(safe_result, f, indent=2, ensure_ascii=False)
+
+        # ---------------- CHUNKS ----------------
         with open("chunks.txt", "w", encoding="utf-8") as f:
             for i, chunk in enumerate(chunks):
                 f.write(f"\n--- CHUNK {i+1} ---\n")
                 f.write(json.dumps(chunk, ensure_ascii=False) + "\n")
 
+        # ---------------- EMBEDDINGS ----------------
         with open("embeddings.txt", "w", encoding="utf-8") as f:
             for i, item in enumerate(embeddings):
                 f.write(f"\n--- EMBEDDING {i+1} ---\n")
                 f.write(f"META: {json.dumps(item.get('metadata', {}), ensure_ascii=False)}\n")
                 f.write("VECTOR (numbers):\n")
                 f.write(str(item.get("vector")) + "\n")
-                
+
+        # ---------------- RETRIEVED ----------------
         with open("retrieved_context.txt", "w", encoding="utf-8") as f:
             for i, item in enumerate(retrieved):
                 f.write(f"\n--- RETRIEVED {i+1} ---\n")
                 f.write(str(item) + "\n")
 
-        # 🔎 search query
+        # ---------------- QUERY ----------------
         with open("search_query.txt", "w", encoding="utf-8") as f:
             f.write(search_query)
 
-        # 🧠 final plan
+        # ---------------- PLAN ----------------
         with open("plan.txt", "w", encoding="utf-8") as f:
             f.write(str(plan))
-        
+
         return result
