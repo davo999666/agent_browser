@@ -3,8 +3,6 @@ import json
 from langgraph.graph import StateGraph, END
 from vector_store.faiss_db import create_vector_db
 
-
-
 from state import BrowserState
 
 from nodes.browser_extractor_node import browser_node, close_browser
@@ -48,20 +46,18 @@ class BrowserWorkflow:
                 "vector_db": self.vector_db
             }
         )
-
+        page = result.get("page_content", {})
+        data = page.get("data", [])
         chunks = result.get("chunks", [])
-        embeddings = result.get("embedding_nodes", [])
+        vector_db = result.get("vector_db")
+        
         retrieved = result.get("retrieved_context", [])
         search_query = result.get("search_query", "")
         plan = result.get("plan", "")
 
-        # 🔥 REMOVE NON-JSON OBJECTS
-        safe_result = dict(result)
-        safe_result.pop("vector_db", None)
-
         # ---------------- OUTPUT JSON ----------------
         with open("output.json", "w", encoding="utf-8") as f:
-            json.dump(safe_result, f, indent=2, ensure_ascii=False)
+            json.dump(data, f, indent=2, ensure_ascii=False)
 
         # ---------------- CHUNKS ----------------
         with open("chunks.txt", "w", encoding="utf-8") as f:
@@ -71,12 +67,20 @@ class BrowserWorkflow:
 
         # ---------------- EMBEDDINGS ----------------
         with open("embeddings.txt", "w", encoding="utf-8") as f:
-            for i, item in enumerate(embeddings):
+        # index_to_docstore_id maps FAISS internal int index -> docstore id
+            for i, docstore_id in vector_db.index_to_docstore_id.items():
+                doc = vector_db.docstore.search(docstore_id)
+                vector = vector_db.index.reconstruct(i)  # numpy array, shape (dim,)
                 f.write(f"\n--- EMBEDDING {i+1} ---\n")
-                f.write(f"META: {json.dumps(item.get('metadata', {}), ensure_ascii=False)}\n")
-                f.write("VECTOR (numbers):\n")
-                f.write(str(item.get("vector")) + "\n")
+                f.write("META:\n")
+                f.write(json.dumps(doc.metadata, ensure_ascii=False, indent=2) + "\n\n")
+                f.write("TEXT:\n")
+                f.write(doc.page_content + "\n\n")
+                f.write("VECTOR (first 10 dims):\n")
+                f.write(str(vector[:10].tolist()) + "\n")
+                f.write(f"VECTOR DIM: {len(vector)}\n")
 
+        
         # ---------------- RETRIEVED ----------------
         with open("retrieved_context.txt", "w", encoding="utf-8") as f:
             for i, item in enumerate(retrieved):

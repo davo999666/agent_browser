@@ -27,5 +27,4 @@ def embed_node(state):
     return {
         **state,
         "vector_db": vector_db,
-        "embedding_nodes": metadatas
     }

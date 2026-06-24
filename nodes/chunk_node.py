@@ -1,13 +1,13 @@
-from typing import Dict, Any, List
+from typing import Dict, Any
 
 def chunk_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    page = state.get("page_content", [])
+    page = state.get("page_content", {})
+    nodes = page.get("data", [])
 
     chunks = []
-
     keys = ["tag", "class", "href", "text", "title", "role", "placeholder", "onClick"]
 
-    for node in page:
+    for node in nodes:
         if not isinstance(node, dict):
             continue
 

@@ -29,6 +29,7 @@ def planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         **state,
+        "search_query" : search_query,
         "retrieved_context": retrieved_chunks,
         "plan": result
     }

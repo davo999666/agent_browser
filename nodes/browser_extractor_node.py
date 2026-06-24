@@ -220,8 +220,10 @@ def browser_node(state: Dict[str, Any]) -> Dict[str, Any]:
     return {
         **state,
         "url": current_url,
-        "title": title,
-        "page_content": page_data
+        "page_content": {
+                            "title": title,
+                            "data": page_data
+                        }
     }
 
 
