@@ -1,0 +1,7 @@
+langgraph
+playwright
+langchain-text-splitters
+langchain_openai
+langchain-huggingface
+faiss-cpu
+sentence_transformers
