@@ -16,7 +16,7 @@ def planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
     })
 
     # 🔍 2. retrieve relevant page data from vector DB
-    retrieved_chunks = retrieve(search_query, vector_db)
+    retrieved_chunks = retrieve(search_query, vector_db, k=10)
 
     # 📄 3. build context from retrieval
     context = "\n".join(retrieved_chunks)

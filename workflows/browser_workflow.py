@@ -19,19 +19,19 @@ class BrowserWorkflow:
 
         graph = StateGraph(BrowserState)
 
-        graph.add_node("planner", planner_node)
         graph.add_node("browser", browser_node)
-        graph.add_node("chunk", chunk_node)
-        graph.add_node("embed", embed_node)
-        graph.add_node("close_browser", close_browser)
+        graph.add_node("chunker", chunk_node)
+        graph.add_node("embedder", embed_node)
+        graph.add_node("planner", planner_node)
+        graph.add_node("closer", close_browser)
 
         graph.set_entry_point("browser")
 
-        graph.add_edge("browser", "chunk")
-        graph.add_edge("chunk", "embed")
-        graph.add_edge("embed", "planner")
-        graph.add_edge("planner", "close_browser")
-        graph.add_edge("close_browser", END)
+        graph.add_edge("browser", "chunker")
+        graph.add_edge("chunker", "embedder")
+        graph.add_edge("embedder", "planner")
+        graph.add_edge("planner", "closer")
+        graph.add_edge("closer", END)
 
 
         self.app = graph.compile()
@@ -49,8 +49,7 @@ class BrowserWorkflow:
         page = result.get("page_content", {})
         data = page.get("data", [])
         chunks = result.get("chunks", [])
-        vector_db = result.get("vector_db")
-        
+        vector_db = result.get("vector_db")    
         retrieved = result.get("retrieved_context", [])
         search_query = result.get("search_query", "")
         plan = result.get("plan", "")

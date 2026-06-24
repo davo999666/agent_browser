@@ -25,10 +25,22 @@ TASK:
 
 # 🔍 Query generator prompt
 query_prompt = ChatPromptTemplate.from_template("""
-From this goal, create a search query for retrieving relevant web page data.
+You are a data filtering planner for a web scraping agent.
 
 GOAL:
 {goal}
 
-Return ONLY the search query.
+Step 1:
+Define what VALID results look like.
+
+Step 2:
+Define what INVALID results are.
+
+Step 3:
+List keywords that represent HIGH-RELEVANCE data only.
+
+Return ONLY structured output:
+- valid_data:
+- invalid_data:
+- search_terms:
 """)
