@@ -3,21 +3,16 @@ import logging
 
 from langchain_core.messages import ToolMessage
 
+from chains.worker_chain import TOOL_MAP, worker_llm_with_tools
 from llm.model import model
 from prompts.worker_prompt import worker_prompt
 from tools.browser_lifecycle import BrowserLifecycle
-from tools.browser_tools import set_browser_lifecycle, ALL_BROWSER_TOOLS
+from tools.browser_tools import set_browser_lifecycle
 
 logger = logging.getLogger(__name__)
 
-# Build a lookup: tool name -> tool function
-TOOL_MAP = {t.name: t for t in ALL_BROWSER_TOOLS}
-
-# LLM with tools bound (reused across iterations)
-_llm_with_tools = model.bind_tools(ALL_BROWSER_TOOLS)
-
 # Maximum tool-call iterations per step to prevent infinite loops
-MAX_ITERATIONS_PER_STEP = 15
+MAX_ITERATIONS_PER_STEP = 20
 
 
 def _execute_tool_call(tool_call: dict) -> ToolMessage:
@@ -39,22 +34,10 @@ def _execute_tool_call(tool_call: dict) -> ToolMessage:
 
 
 def worker_node(state):
-    """Execute plan steps using the LLM with browser tools.
-
-    For each step the LLM decides which tool(s) to call, we execute them,
-    feed the results back, and repeat until the LLM produces a final text
-    answer (no more tool_calls) or we hit the iteration limit.
-    """
-    print("\n🔥 WORKER STARTED")
-
+    """Execute plan steps using browser tools until the task is completed."""
     browser_lifecycle: BrowserLifecycle = state.get("browser_lifecycle")
-    if not browser_lifecycle:
-        print("❌ NO BROWSER_LIFECYCLE")
-        return state
-
     # Wire up BrowserLifecycle so browser_tools can access the page
     set_browser_lifecycle(browser_lifecycle)
-
     # ------------------------------------------------------------------
     # Parse plan
     # ------------------------------------------------------------------
@@ -67,11 +50,6 @@ def worker_node(state):
 
     steps = plan_dict.get("steps", [])
     goal = state.get("goal", "")
-
-    if not steps:
-        print("⚠️  No steps in plan — nothing to execute")
-        return {**state, "result": "No steps found in plan."}
-
     # ------------------------------------------------------------------
     # Execute each step
     # ------------------------------------------------------------------
@@ -85,10 +63,8 @@ def worker_node(state):
             f"element={step.get('element')}, input={step.get('input')}, "
             f"reason={step.get('reason')}"
         )
-        print(f"\n{'='*60}")
         print(f"▶ EXECUTING {step_summary}")
-        print(f"{'='*60}")
-
+        
         history_text = "\n".join(history) if history else "(no actions yet)"
 
         # ---- Tool-call loop for this step ----
@@ -104,7 +80,7 @@ def worker_node(state):
 
         for iteration in range(1, MAX_ITERATIONS_PER_STEP + 1):
             # Invoke LLM with full message history (including tools)
-            response = _llm_with_tools.invoke(messages)
+            response = worker_llm_with_tools.invoke(messages)
 
             # Check if the LLM wants to call tools
             tool_calls = getattr(response, "tool_calls", None) or []

@@ -1,37 +1,56 @@
-import os
+"""
+Playwright-based browser automation tools.
+
+Provides nine tools for browser interaction:
+- navigate_tool: Navigate to a URL
+- click_tool: Click an element identified by metadata
+- type_tool: Type text into an input element identified by metadata
+- scroll_tool: Scroll the page vertically
+- wait_tool: Wait for a specified number of seconds
+- go_back_tool: Navigate back to the previous page
+- press_key_tool: Press a keyboard key
+- get_current_url: Get the current page URL and title
+- extract_elements: Extract elements matching a CSS selector
+
+Element metadata format:
+{
+    "tag": "input | button | a | p | div | span | ...",
+    "text": "visible text if available",
+    "class": "element class names",
+    "href": "link url if available",
+    "placeholder": "input placeholder if available",
+    "name": "input name if available",
+    "role": "element role if available",
+    "id": "element id if available"
+}
+
+Element selection priority (highest first):
+1. id
+2. role + text
+3. href
+4. name
+5. placeholder
+6. exact text
+7. class
+8. tag
+"""
+
+import json
+import logging
 import time
+from typing import Dict, Any
 
 from langchain_core.tools import tool
+from playwright.sync_api import Page, Locator
 
 from tools.browser_lifecycle import BrowserLifecycle
 
+logger = logging.getLogger(__name__)
+
 _browser_lifecycle: BrowserLifecycle = None
 
-# Directory for screenshots
-SCREENSHOT_DIR = "screenshots"
-os.makedirs(SCREENSHOT_DIR, exist_ok=True)
-
 # Delay between actions so the user can visually follow along in the browser
-ACTION_DELAY_SECONDS = 2.0
-
-def _highlight_element(page, selector: str, duration_ms: int = 2000):
-    """Highlight an element with a colored border so the user can see what's being interacted with."""
-    try:
-        page.evaluate(f"""
-            () => {{
-                const el = document.querySelector('{selector}');
-                if (el) {{
-                    el.style.outline = '4px solid red';
-                    el.style.outlineOffset = '2px';
-                    setTimeout(() => {{
-                        el.style.outline = '';
-                        el.style.outlineOffset = '';
-                    }}, {duration_ms});
-                }}
-            }}
-        """)
-    except Exception:
-        pass  # Don't fail if highlighting doesn't work
+ACTION_DELAY_SECONDS = 1.0
 
 
 def set_browser_lifecycle(bl: BrowserLifecycle):
@@ -40,7 +59,7 @@ def set_browser_lifecycle(bl: BrowserLifecycle):
     _browser_lifecycle = bl
 
 
-def _get_page():
+def _get_page() -> Page:
     """Get the current page from the BrowserLifecycle instance."""
     if _browser_lifecycle is None:
         raise RuntimeError("BrowserLifecycle not initialized. Call set_browser_lifecycle() first.")
@@ -50,311 +69,264 @@ def _get_page():
     return page
 
 
+def _find_element(page: Page, metadata: Dict[str, Any]) -> Locator:
+    """Find the most relevant element matching the metadata using priority strategy.
+
+    Tries each selection strategy in priority order and returns the first
+    locator that matches at least one visible element on the page.
+
+    Priority order (highest first):
+    1. id
+    2. role + text
+    3. href
+    4. name
+    5. placeholder
+    6. exact text
+    7. class
+    8. tag
+    """
+    tag = metadata.get("tag", "")
+    element_id = metadata.get("id", "")
+    role = metadata.get("role", "")
+    text = metadata.get("text", "")
+    href = metadata.get("href", "")
+    name = metadata.get("name", "")
+    placeholder = metadata.get("placeholder", "")
+    css_class = metadata.get("class", "")
+
+    # Build ordered list of (strategy_name, locator_factory) pairs
+    strategies = []
+
+    # 1. ID (highest priority)
+    if element_id:
+        strategies.append(("id", lambda: page.locator(f"#{element_id}")))
+
+    # 2. Role + text
+    if role and text:
+        def _role_text():
+            try:
+                return page.get_by_role(role, name=text)
+            except Exception:
+                # Fallback if role is not a valid ARIA role
+                return page.locator(f"[role='{role}']:has-text('{text}')")
+        strategies.append(("role+text", _role_text))
+
+    # 3. Href (for links)
+    if href:
+        strategies.append(("href", lambda: page.locator(f"a[href='{href}']")))
+
+    # 4. Name attribute
+    if name:
+        strategies.append(("name", lambda: page.locator(f"[name='{name}']")))
+
+    # 5. Placeholder
+    if placeholder:
+        strategies.append(("placeholder", lambda: page.locator(f"[placeholder='{placeholder}']")))
+
+    # 6. Exact text (optionally scoped to tag)
+    if text:
+        def _exact_text():
+            if tag:
+                return page.locator(f"{tag}:has-text('{text}')")
+            return page.get_by_text(text, exact=True)
+        strategies.append(("text", _exact_text))
+
+    # 7. Class (all classes combined, optionally scoped to tag)
+    if css_class:
+        def _class_selector():
+            classes = css_class.split()
+            class_part = ".".join(classes)
+            if tag:
+                return page.locator(f"{tag}.{class_part}")
+            return page.locator(f".{class_part}")
+        strategies.append(("class", _class_selector))
+
+    # 8. Tag only (lowest priority)
+    if tag:
+        strategies.append(("tag", lambda: page.locator(tag)))
+
+    # Try each strategy in priority order
+    for strategy_name, strategy_fn in strategies:
+        try:
+            locator = strategy_fn()
+            count = locator.count()
+            if count > 0:
+                logger.debug(f"Found element using '{strategy_name}' strategy ({count} match(es))")
+                return locator.first
+        except Exception as e:
+            logger.debug(f"Strategy '{strategy_name}' failed: {e}")
+            continue
+
+    raise ValueError(f"No matching element found for metadata: {json.dumps(metadata)}")
+
+
 @tool
-def click_tool(selector: str, index: int = 0) -> str:
-    """Click an element on the page using a CSS selector or text-based locator.
-    
+def click_tool(element_metadata: Dict[str, Any]) -> str:
+    """Click an element on the page identified by its metadata attributes.
+
     Args:
-        selector: CSS selector or text locator (e.g., 'button.submit', '#login-btn', 'text=Sign In')
-        index: If multiple elements match, click the one at this index (0-based, default: 0)
-    
-    Examples:
-        - 'button.submit' - click submit button
-        - '#login-btn' - click element with id 'login-btn'
-        - 'text=Real Estate' - click element containing text 'Real Estate'
-        - 'a[href="/category/54"]' - click link with specific href
+        element_metadata: Dictionary describing the element to click. Supported keys:
+            - tag: HTML tag name (e.g., 'button', 'a', 'div', 'p', 'span')
+            - text: visible text content of the element
+            - class: CSS class names (space-separated)
+            - href: link URL (for <a> tags)
+            - id: element ID attribute
+            - role: ARIA role (e.g., 'link', 'button')
+            - name: input name attribute
+            - placeholder: input placeholder text
+
+        The element is located using this priority (highest first):
+        id > role+text > href > name > placeholder > exact text > class > tag
+
+    Returns:
+        Success or error message describing the result.
     """
     try:
         page = _get_page()
-        
-        # Handle text-based selectors specially
-        if selector.startswith('text='):
-            text = selector[5:]  # Remove 'text=' prefix
-            # Find all elements with this text and highlight the one we'll click
-            page.evaluate(f"""
-                () => {{
-                    const elements = [];
-                    const walker = document.createTreeWalker(
-                        document.body,
-                        NodeFilter.SHOW_TEXT,
-                        null,
-                        false
-                    );
-                    let node;
-                    while (node = walker.nextNode()) {{
-                        if (node.textContent.trim().includes('{text}')) {{
-                            elements.push(node.parentElement);
-                        }}
-                    }}
-                    if (elements.length > {index}) {{
-                        const el = elements[{index}];
-                        el.style.outline = '4px solid red';
-                        el.style.outlineOffset = '2px';
-                        setTimeout(() => {{
-                            el.style.outline = '';
-                            el.style.outlineOffset = '';
-                        }}, 3000);
-                    }}
-                }}
-            """)
-            time.sleep(0.5)
-            
-            # Use locator with index to click specific element
-            locator = page.locator(selector)
-            count = locator.count()
-            if count > index:
-                locator.nth(index).click(timeout=10000, force=True)
-            else:
-                locator.first.click(timeout=10000, force=True)
-        else:
-            # Highlight the element before clicking so user can see it
-            _highlight_element(page, selector, duration_ms=3000)
-            time.sleep(0.5)  # Brief pause to see the highlight
-            
-            # Use locator with index for CSS selectors too
-            locator = page.locator(selector)
-            count = locator.count()
-            if count > index:
-                locator.nth(index).click(timeout=10000, force=True)
-            else:
-                locator.first.click(timeout=10000, force=True)
-        
+        locator = _find_element(page, element_metadata)
+
+        # Wait for element to be visible and actionable
+        locator.wait_for(state="visible", timeout=10000)
+
+        # Click the element
+        locator.click(timeout=10000)
+
+        # Wait for any navigation or DOM updates to settle
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=5000)
+        except Exception:
+            pass  # Page may not navigate after click
+
         time.sleep(ACTION_DELAY_SECONDS)
-        return f"Clicked element: {selector} (index={index})"
+        return f"Successfully clicked element: {json.dumps(element_metadata)}"
     except Exception as e:
-        return f"Error clicking '{selector}': {str(e)}"
-
-
-@tool
-def type_tool(selector: str, text: str) -> str:
-    """Type text into an input element identified by a CSS selector.
-    
-    Args:
-        selector: CSS selector for the input element (e.g. 'input#search', '#email')
-        text: The text to type into the element
-    """
-    try:
-        page = _get_page()
-        # Highlight the element before typing so user can see it
-        _highlight_element(page, selector, duration_ms=3000)
-        time.sleep(0.5)  # Brief pause to see the highlight
-        
-        # Show typing indicator
-        page.evaluate(f"""
-            () => {{
-                const indicator = document.createElement('div');
-                indicator.style.cssText = 'position:fixed;top:10px;right:10px;font-size:18px;z-index:99999;background:rgba(0,200,0,0.9);color:white;padding:15px;border-radius:10px;';
-                indicator.textContent = 'Typing: "{text}"';
-                document.body.appendChild(indicator);
-                setTimeout(() => indicator.remove(), 2500);
-            }}
-        """)
-        time.sleep(0.3)
-        
-        page.fill(selector, text)
-        time.sleep(ACTION_DELAY_SECONDS)
-        return f"Typed '{text}' into {selector}"
-    except Exception as e:
-        return f"Error typing into '{selector}': {str(e)}"
-
-
-@tool
-def scroll_tool(pixels: int) -> str:
-    """Scroll the page vertically by the given number of pixels. Use negative values to scroll up."""
-    try:
-        page = _get_page()
-        # Add visual indicator showing scroll direction
-        direction = "↓" if pixels > 0 else "↑"
-        abs_pixels = abs(pixels)
-        page.evaluate(f"""
-            () => {{
-                const indicator = document.createElement('div');
-                indicator.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);font-size:48px;z-index:99999;background:rgba(255,0,0,0.8);color:white;padding:20px;border-radius:10px;';
-                indicator.textContent = 'Scrolling {direction} {abs_pixels}px';
-                document.body.appendChild(indicator);
-                setTimeout(() => indicator.remove(), 1500);
-            }}
-        """)
-        time.sleep(0.3)
-        
-        # Find and scroll the actual scrollable element (handles pages with overflow containers)
-        scrolled = page.evaluate(f"""
-            () => {{
-                // Function to find the scrollable element
-                function findScrollableElement() {{
-                    // Check if documentElement or body is scrollable
-                    const docEl = document.documentElement;
-                    const body = document.body;
-                    
-                    // If window itself is scrollable, return null (we'll use window.scrollBy)
-                    if (docEl.scrollHeight > docEl.clientHeight || body.scrollHeight > body.clientHeight) {{
-                        // Check if there's a child element that's actually scrollable
-                        const allElements = document.querySelectorAll('*');
-                        for (const el of allElements) {{
-                            const style = window.getComputedStyle(el);
-                            const overflowY = style.overflowY;
-                            const overflowX = style.overflowX;
-                            if ((overflowY === 'auto' || overflowY === 'scroll' || overflowX === 'auto' || overflowX === 'scroll')
-                                && el.scrollHeight > el.clientHeight) {{
-                                return el;
-                            }}
-                        }}
-                        return null; // Use window scrolling
-                    }}
-                    
-                    // Look for scrollable containers
-                    const allElements = document.querySelectorAll('*');
-                    for (const el of allElements) {{
-                        const style = window.getComputedStyle(el);
-                        const overflowY = style.overflowY;
-                        const overflowX = style.overflowX;
-                        if ((overflowY === 'auto' || overflowY === 'scroll' || overflowX === 'auto' || overflowX === 'scroll')
-                            && el.scrollHeight > el.clientHeight) {{
-                            return el;
-                        }}
-                    }}
-                    return null;
-                }}
-                
-                const scrollableEl = findScrollableElement();
-                if (scrollableEl) {{
-                    scrollableEl.scrollBy(0, {pixels});
-                    return 'element';
-                }} else {{
-                    window.scrollBy(0, {pixels});
-                    return 'window';
-                }}
-            }}
-        """)
-        
-        time.sleep(ACTION_DELAY_SECONDS)
-        return f"Scrolled {pixels}px {direction} ({scrolled})"
-    except Exception as e:
-        return f"Error scrolling: {str(e)}"
+        return f"Error clicking element {json.dumps(element_metadata)}: {str(e)}"
 
 
 @tool
 def navigate_tool(url: str) -> str:
-    """Navigate the browser to a new URL."""
+    """Navigate the browser to a new URL and wait for the page to finish loading.
+
+    Args:
+        url: The URL to navigate to.
+
+    Returns:
+        The current page URL and title after navigation completes.
+    """
     try:
         page = _get_page()
-        # Show navigation indicator
-        page.evaluate(f"""
-            () => {{
-                const indicator = document.createElement('div');
-                indicator.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);font-size:24px;z-index:99999;background:rgba(0,100,255,0.9);color:white;padding:20px;border-radius:10px;';
-                indicator.textContent = 'Navigating to: {url}';
-                document.body.appendChild(indicator);
-                setTimeout(() => indicator.remove(), 2000);
-            }}
-        """)
-        time.sleep(0.5)
-        page.goto(url, timeout=30000)
+        page.goto(url, wait_until="load", timeout=30000)
+
+        current_url = page.url
+        title = page.title()
+
         time.sleep(ACTION_DELAY_SECONDS)
-        return f"Navigated to {url}"
+        return f"Navigated to: {current_url}\nTitle: {title}"
     except Exception as e:
         return f"Error navigating to '{url}': {str(e)}"
 
 
 @tool
-def get_page_state_tool(dummy: str = "") -> str:
-    """Get the current browser page state: URL, title, visible text, links, buttons, and forms.
-    Call this FIRST to observe the current page before deciding the next action.
-    The dummy parameter is unused but required by some LLM tool-calling interfaces.
+def type_tool(element_metadata: Dict[str, Any], text: str) -> str:
+    """Type text into an input element identified by its metadata attributes.
+
+    Args:
+        element_metadata: Dictionary describing the input element. Supported keys:
+            - tag: HTML tag name (e.g., 'input', 'textarea')
+            - text: visible text content
+            - class: CSS class names (space-separated)
+            - id: element ID attribute
+            - role: ARIA role (e.g., 'textbox', 'input')
+            - name: input name attribute
+            - placeholder: input placeholder text
+
+        The element is located using this priority (highest first):
+        id > role+text > href > name > placeholder > exact text > class > tag
+
+        text: The text to type into the element.
+
+    Behavior:
+        - Locates the target input element
+        - Checks whether the input already contains text
+        - If text exists, clears the field completely
+        - Types the new text
+        - Verifies that the text was entered successfully
+
+    Returns:
+        Success or error message describing the result.
     """
     try:
         page = _get_page()
-        current_url = page.url
-        title = page.title()
-        
-        # Get visible text content
-        text_content = page.evaluate("""
-            () => {
-                const body = document.body;
-                if (!body) return '';
-                return body.innerText.substring(0, 5000);
-            }
-        """)
-        
-        # Get all links
-        links = page.evaluate("""
-            () => {
-                const anchors = Array.from(document.querySelectorAll('a[href]'));
-                return anchors.slice(0, 30).map(a => ({
-                    text: a.innerText.trim().substring(0, 50),
-                    href: a.href
-                })).filter(a => a.text);
-            }
-        """)
-        
-        # Get all buttons
-        buttons = page.evaluate("""
-            () => {
-                const btns = Array.from(document.querySelectorAll('button, input[type="button"], input[type="submit"]'));
-                return btns.slice(0, 20).map(b => ({
-                    text: b.innerText || b.value || '',
-                    id: b.id || '',
-                    class: b.className || ''
-                })).filter(b => b.text);
-            }
-        """)
-        
-        # Get all forms/inputs
-        forms = page.evaluate("""
-            () => {
-                const inputs = Array.from(document.querySelectorAll('input, select, textarea'));
-                return inputs.slice(0, 20).map(i => ({
-                    type: i.type || i.tagName.toLowerCase(),
-                    name: i.name || '',
-                    id: i.id || '',
-                    placeholder: i.placeholder || ''
-                }));
-            }
-        """)
-        
-        result = f"URL: {current_url}\nTitle: {title}\n\n"
-        result += f"Page Content:\n{text_content}\n\n"
-        
-        if links:
-            result += "Links:\n" + "\n".join([f"  - {l['text']}: {l['href']}" for l in links[:15]]) + "\n\n"
-        
-        if buttons:
-            result += "Buttons:\n" + "\n".join([f"  - {b['text']} (id={b['id']}, class={b['class']})" for b in buttons[:10]]) + "\n\n"
-        
-        if forms:
-            result += "Forms/Inputs:\n" + "\n".join([f"  - {f['type']}: name={f['name']}, id={f['id']}, placeholder={f['placeholder']}" for f in forms[:10]]) + "\n"
-        
-        return result
+        locator = _find_element(page, element_metadata)
+
+        # Wait for element to be visible and actionable
+        locator.wait_for(state="visible", timeout=10000)
+
+        # Check if input already has text
+        try:
+            current_value = locator.input_value()
+            if current_value:
+                # Clear the field completely
+                locator.fill("")
+                logger.debug(f"Cleared existing text: '{current_value}'")
+        except Exception:
+            # input_value() may fail on non-input elements; proceed anyway
+            pass
+
+        # Type the new text (fill automatically clears and types)
+        locator.fill(text)
+
+        # Verify the text was entered successfully
+        try:
+            actual_value = locator.input_value()
+            if actual_value == text:
+                time.sleep(ACTION_DELAY_SECONDS)
+                return f"Successfully typed '{text}' into element: {json.dumps(element_metadata)}"
+            else:
+                time.sleep(ACTION_DELAY_SECONDS)
+                return f"Warning: Expected '{text}' but field contains '{actual_value}' in element: {json.dumps(element_metadata)}"
+        except Exception:
+            # Could not verify, but fill() succeeded
+            time.sleep(ACTION_DELAY_SECONDS)
+            return f"Typed '{text}' into element (verification skipped): {json.dumps(element_metadata)}"
     except Exception as e:
-        return f"Error getting page state: {str(e)}"
+        return f"Error typing into element {json.dumps(element_metadata)}: {str(e)}"
 
 
 @tool
-def press_key_tool(key: str) -> str:
-    """Press a keyboard key. Examples: 'Enter', 'Tab', 'Escape', 'ArrowDown'."""
+def scroll_tool(pixels: int) -> str:
+    """Scroll the page vertically by the given number of pixels. Use negative values to scroll up.
+    
+    Args:
+        pixels: Number of pixels to scroll. Positive = down, negative = up.
+    
+    Returns:
+        Success or error message describing the result.
+    """
     try:
         page = _get_page()
-        # Show key press indicator
-        page.evaluate(f"""
-            () => {{
-                const indicator = document.createElement('div');
-                indicator.style.cssText = 'position:fixed;bottom:20px;right:20px;font-size:24px;z-index:99999;background:rgba(100,0,200,0.9);color:white;padding:15px 25px;border-radius:10px;font-family:monospace;';
-                indicator.textContent = '⌨️ Key: {key}';
-                document.body.appendChild(indicator);
-                setTimeout(() => indicator.remove(), 2000);
-            }}
-        """)
-        time.sleep(0.3)
-        page.keyboard.press(key)
+        direction = "down" if pixels > 0 else "up"
+        abs_pixels = abs(pixels)
+        
+        # Use Playwright's mouse wheel API
+        page.mouse.wheel(0, pixels)
+        
         time.sleep(ACTION_DELAY_SECONDS)
-        return f"Pressed key: {key}"
+        return f"Scrolled {abs_pixels}px {direction}"
     except Exception as e:
-        return f"Error pressing key '{key}': {str(e)}"
+        return f"Error scrolling: {str(e)}"
 
 
 @tool
 def wait_tool(seconds: int) -> str:
-    """Wait for a specified number of seconds for the page to load or update."""
+    """Wait for a specified number of seconds for the page to load or update.
+    
+    Args:
+        seconds: Number of seconds to wait.
+    
+    Returns:
+        Success or error message describing the result.
+    """
     try:
         page = _get_page()
         page.wait_for_timeout(seconds * 1000)
@@ -364,155 +336,137 @@ def wait_tool(seconds: int) -> str:
 
 
 @tool
-def select_option_tool(selector: str, value: str) -> str:
-    """Select an option in a dropdown (<select>) element.
+def go_back_tool(dummy: str = "") -> str:
+    """Navigate back to the previous page in browser history.
     
     Args:
-        selector: CSS selector for the <select> element (e.g. 'select#category')
-        value: The value or label of the option to select
+        dummy: Unused parameter required by some LLM tool-calling interfaces.
+    
+    Returns:
+        The current page URL and title after going back.
     """
     try:
         page = _get_page()
-        page.select_option(selector, value)
+        page.go_back(wait_until="load", timeout=30000)
+        
+        current_url = page.url
+        title = page.title()
+        
         time.sleep(ACTION_DELAY_SECONDS)
-        return f"Selected '{value}' in {selector}"
+        return f"Went back to: {current_url}\nTitle: {title}"
     except Exception as e:
-        return f"Error selecting option in '{selector}': {str(e)}"
+        return f"Error going back: {str(e)}"
 
 
 @tool
-def get_element_info_tool(selector: str) -> str:
-    """Get detailed information about a specific element: its tag, text, attributes, and visibility.
+def press_key_tool(key: str) -> str:
+    """Press a keyboard key.
     
     Args:
-        selector: CSS selector for the element to inspect
+        key: The key to press. Examples: 'Enter', 'Tab', 'Escape', 'ArrowDown', 'ArrowUp'.
+    
+    Returns:
+        Success or error message describing the result.
     """
     try:
         page = _get_page()
-        info = page.evaluate(f"""
-            () => {{
-                const el = document.querySelector('{selector}');
-                if (!el) return 'Element not found';
-                const attrs = {{}};
-                for (const attr of el.attributes) {{
-                    attrs[attr.name] = attr.value;
-                }}
-                return JSON.stringify({{
-                    tag: el.tagName.toLowerCase(),
-                    text: el.innerText ? el.innerText.substring(0, 500) : '',
-                    attributes: attrs,
-                    visible: el.offsetParent !== null,
-                    rect: el.getBoundingClientRect()
-                }});
-            }}
-        """)
-        return f"Element info for '{selector}':\n{info}"
+        page.keyboard.press(key)
+        time.sleep(ACTION_DELAY_SECONDS)
+        return f"Pressed key: {key}"
     except Exception as e:
-        return f"Error getting element info for '{selector}': {str(e)}"
+        return f"Error pressing key '{key}': {str(e)}"
 
 
 @tool
-def wait_for_selector_tool(selector: str) -> str:
-    """Wait for an element matching the CSS selector to appear on the page (up to 10 seconds).
+def get_current_url(dummy: str = "") -> str:
+    """Get the current browser page URL and title.
     
     Args:
-        selector: CSS selector to wait for (e.g. '.results-loaded', '#content')
+        dummy: Unused parameter required by some LLM tool-calling interfaces.
+    
+    Returns:
+        The current page URL and title.
     """
     try:
         page = _get_page()
-        page.wait_for_selector(selector, timeout=10000)
-        return f"Element '{selector}' appeared on page"
+        current_url = page.url
+        title = page.title()
+        return f"Current URL: {current_url}\nTitle: {title}"
     except Exception as e:
-        return f"Timeout waiting for '{selector}': {str(e)}"
+        return f"Error getting current URL: {str(e)}"
 
 
 @tool
-def list_clickable_elements_tool(dummy: str = "") -> str:
-    """List all clickable elements on the page (links, buttons, etc.) with their selectors.
-    Use this to discover what elements are available to click.
+def extract_elements(selector: str) -> str:
+    """Extract all elements matching a CSS selector with their text and attributes.
+    
+    Args:
+        selector: CSS selector to match elements (e.g., 'a', 'button', '.product-item', 'div.card').
+    
+    Returns:
+        JSON string containing extracted elements with their text, href (for links), and other attributes.
     """
     try:
         page = _get_page()
-        elements = page.evaluate("""
-            () => {
-                const clickables = [];
+        locator = page.locator(selector)
+        count = locator.count()
+        
+        if count == 0:
+            return f"No elements found matching selector: {selector}"
+        
+        # Limit to first 50 elements
+        count = min(count, 50)
+        elements = []
+        
+        for i in range(count):
+            element = locator.nth(i)
+            try:
+                # Extract element data using Playwright APIs
+                tag = element.evaluate("el => el.tagName.toLowerCase()")
+                text = element.text_content() or ""
+                text = text.strip()[:200]
                 
-                // Get all links
-                const links = Array.from(document.querySelectorAll('a[href]'));
-                links.slice(0, 30).forEach((link, idx) => {
-                    const text = link.innerText.trim().substring(0, 50);
-                    if (text) {
-                        clickables.push({
-                            type: 'link',
-                            text: text,
-                            selector: `a[href="${link.getAttribute('href')}"]`,
-                            index: idx
-                        });
-                    }
-                });
+                # Get attributes
+                href = element.get_attribute("href")
+                element_id = element.get_attribute("id")
+                css_class = element.get_attribute("class")
                 
-                // Get all buttons
-                const buttons = Array.from(document.querySelectorAll('button, input[type="button"], input[type="submit"]'));
-                buttons.slice(0, 20).forEach((btn, idx) => {
-                    const text = (btn.innerText || btn.value || '').trim().substring(0, 50);
-                    if (text) {
-                        clickables.push({
-                            type: 'button',
-                            text: text,
-                            selector: btn.id ? `#${btn.id}` : `button:nth-of-type(${idx + 1})`,
-                            index: idx
-                        });
-                    }
-                });
+                # Check visibility
+                is_visible = element.is_visible()
                 
-                return clickables;
-            }
-        """)
+                # Only include elements with text or href
+                if text or href:
+                    elements.append({
+                        "index": i,
+                        "tag": tag,
+                        "text": text,
+                        "href": href,
+                        "id": element_id,
+                        "class": css_class,
+                        "visible": is_visible
+                    })
+            except Exception as e:
+                logger.debug(f"Failed to extract element {i}: {e}")
+                continue
         
         if not elements:
-            return "No clickable elements found on page"
+            return f"No elements with text or href found matching selector: {selector}"
         
-        result = "Clickable Elements:\n"
-        for el in elements:
-            result += f"  [{el['type']}] \"{el['text']}\" → selector: '{el['selector']}' (index={el['index']})\n"
-        
-        return result
+        return json.dumps(elements, indent=2)
     except Exception as e:
-        return f"Error listing clickable elements: {str(e)}"
-
-
-@tool
-def take_screenshot_tool(filename: str = "") -> str:
-    """Take a screenshot of the current page and save it to the screenshots folder.
-    Call this to visually document what you're seeing.
-    
-    Args:
-        filename: Optional custom filename (without extension). If empty, uses timestamp.
-    """
-    try:
-        page = _get_page()
-        if not filename:
-            filename = f"screenshot_{int(time.time())}"
-        
-        filepath = os.path.join(SCREENSHOT_DIR, f"{filename}.png")
-        page.screenshot(path=filepath, full_page=False)
-        return f"Screenshot saved to: {filepath}"
-    except Exception as e:
-        return f"Error taking screenshot: {str(e)}"
+        return f"Error extracting elements with selector '{selector}': {str(e)}"
 
 
 # List of all browser tools for easy import
 ALL_BROWSER_TOOLS = [
+    navigate_tool,
     click_tool,
     type_tool,
     scroll_tool,
-    navigate_tool,
-    get_page_state_tool,
-    press_key_tool,
     wait_tool,
-    select_option_tool,
-    get_element_info_tool,
-    wait_for_selector_tool,
-    list_clickable_elements_tool,
-    take_screenshot_tool,
+    go_back_tool,
+    press_key_tool,
+    get_current_url,
+    extract_elements,
 ]
+

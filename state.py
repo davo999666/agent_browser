@@ -25,9 +25,6 @@ class BrowserState(TypedDict, total=False):
     # 🧠 planner output (IMPORTANT: dict, not string)
     plan: Dict[str, Any]
 
-    # 👀 optional evaluation
-    review: Optional[str]
-
     # 🎯 final result
     result: Optional[Any]
 
@@ -37,6 +34,4 @@ class BrowserState(TypedDict, total=False):
     # 📄 current page object (optional but useful)
     page: Any
 
-    # 📜 worker execution history (list of action logs)
-    worker_history: Optional[List[str]]
 
