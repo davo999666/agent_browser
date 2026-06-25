@@ -1,130 +1,150 @@
 import json
+import logging
+
+from langchain_core.messages import ToolMessage
+
+from llm.model import model
+from prompts.worker_prompt import worker_prompt
+from tools.browser_lifecycle import BrowserLifecycle
+from tools.browser_tools import set_browser_lifecycle, ALL_BROWSER_TOOLS
+
+logger = logging.getLogger(__name__)
+
+# Build a lookup: tool name -> tool function
+TOOL_MAP = {t.name: t for t in ALL_BROWSER_TOOLS}
+
+# LLM with tools bound (reused across iterations)
+_llm_with_tools = model.bind_tools(ALL_BROWSER_TOOLS)
+
+# Maximum tool-call iterations per step to prevent infinite loops
+MAX_ITERATIONS_PER_STEP = 15
+
+
+def _execute_tool_call(tool_call: dict) -> ToolMessage:
+    """Execute a single LangChain tool_call dict and return a ToolMessage."""
+    name = tool_call["name"]
+    args = tool_call["args"]
+    call_id = tool_call["id"]
+
+    tool_fn = TOOL_MAP.get(name)
+    if tool_fn is None:
+        result = f"Error: unknown tool '{name}'"
+    else:
+        try:
+            result = tool_fn.invoke(args)
+        except Exception as e:
+            result = f"Error executing '{name}': {str(e)}"
+
+    return ToolMessage(content=str(result), tool_call_id=call_id)
 
 
 def worker_node(state):
+    """Execute plan steps using the LLM with browser tools.
+
+    For each step the LLM decides which tool(s) to call, we execute them,
+    feed the results back, and repeat until the LLM produces a final text
+    answer (no more tool_calls) or we hit the iteration limit.
+    """
     print("\n🔥 WORKER STARTED")
 
-    browser = state.get("browser")
-    if not browser:
-        print("❌ NO BROWSER IN STATE")
+    browser_lifecycle: BrowserLifecycle = state.get("browser_lifecycle")
+    if not browser_lifecycle:
+        print("❌ NO BROWSER_LIFECYCLE")
         return state
 
-    # get page safely
-    context = browser.contexts[0]
-    page = context.pages[0] if context.pages else context.new_page()
+    # Wire up BrowserLifecycle so browser_tools can access the page
+    set_browser_lifecycle(browser_lifecycle)
 
-    print("🌐 URL:", page.url)
+    # ------------------------------------------------------------------
+    # Parse plan
+    # ------------------------------------------------------------------
+    plan = state.get("plan", {})
+    plan_text = str(plan)
+    try:
+        plan_dict = json.loads(plan_text)
+    except (json.JSONDecodeError, TypeError):
+        plan_dict = plan if isinstance(plan, dict) else {}
 
-    # ---------------- PLAN ----------------
-    plan_raw = state.get("plan")
-    print("📦 RAW PLAN:", plan_raw)
+    steps = plan_dict.get("steps", [])
+    goal = state.get("goal", "")
 
-    if isinstance(plan_raw, str):
-        try:
-            plan = json.loads(plan_raw)
-        except Exception as e:
-            print("❌ PLAN JSON ERROR:", e)
-            return state
-    else:
-        plan = plan_raw or {}
+    if not steps:
+        print("⚠️  No steps in plan — nothing to execute")
+        return {**state, "result": "No steps found in plan."}
 
-    steps = plan.get("steps", [])
-    print(f"📌 STEPS COUNT: {len(steps)}")
+    # ------------------------------------------------------------------
+    # Execute each step
+    # ------------------------------------------------------------------
+    history: list[str] = []  # running log of completed actions
+    step_results: list[dict] = []
 
-    results = []
+    for step in steps:
+        step_id = step.get("id", "?")
+        step_summary = (
+            f"Step {step_id}: action={step.get('action')}, "
+            f"element={step.get('element')}, input={step.get('input')}, "
+            f"reason={step.get('reason')}"
+        )
+        print(f"\n{'='*60}")
+        print(f"▶ EXECUTING {step_summary}")
+        print(f"{'='*60}")
 
-    # ---------------- EXECUTION ----------------
-    for i, step in enumerate(steps):
-        print(f"\n➡️ STEP {i+1}: {step}")
+        history_text = "\n".join(history) if history else "(no actions yet)"
 
-        action = step.get("action")
-        element = step.get("element")
-        input_text = step.get("input")
+        # ---- Tool-call loop for this step ----
+        # Build the initial message list from the prompt template so that
+        # system + human messages persist across tool-call rounds.
+        prompt_messages = worker_prompt.invoke({
+            "task": goal,
+            "current_step": step_summary,
+            "history": history_text,
+        }).to_messages()
 
-        try:
+        messages = list(prompt_messages)  # mutable copy
 
-            # ---------------- CLICK ----------------
-            if action == "click":
-                print(f"🖱 CLICK -> {element}")
+        for iteration in range(1, MAX_ITERATIONS_PER_STEP + 1):
+            # Invoke LLM with full message history (including tools)
+            response = _llm_with_tools.invoke(messages)
 
-                try:
-                    # best: partial text match
-                    page.locator("a,button,div,span").filter(
-                        has_text=element
-                    ).first.click(timeout=5000)
+            # Check if the LLM wants to call tools
+            tool_calls = getattr(response, "tool_calls", None) or []
 
-                except Exception as e1:
-                    print("⚠ TEXT CLICK FAILED:", e1)
+            if not tool_calls:
+                # LLM produced a final text answer for this step
+                final_text = response.content if hasattr(response, "content") else str(response)
+                print(f"  ✅ Step {step_id} complete: {final_text[:200]}")
+                history.append(f"[Step {step_id}] {final_text}")
+                step_results.append({"step_id": step_id, "result": final_text})
+                break
 
-                    try:
-                        # fallback: raw text
-                        page.get_by_text(element, exact=False).first.click(timeout=5000)
+            # Append AI response with tool_calls, then execute each tool
+            messages.append(response)
 
-                    except Exception as e2:
-                        print("❌ CLICK FAILED:", e2)
+            for tc in tool_calls:
+                print(f"  🔧 Calling {tc['name']}({tc['args']})")
+                tool_msg = _execute_tool_call(tc)
+                print(f"     → {tool_msg.content[:200]}")
+                messages.append(tool_msg)
+                history.append(
+                    f"[Step {step_id}] {tc['name']}({tc['args']}) → {tool_msg.content[:150]}"
+                )
+        else:
+            # Hit iteration limit
+            warning = f"Step {step_id} hit max iterations ({MAX_ITERATIONS_PER_STEP})"
+            print(f"  ⚠️  {warning}")
+            history.append(f"[Step {step_id}] {warning}")
+            step_results.append({"step_id": step_id, "result": warning})
 
-            # ---------------- TYPE ----------------
-            elif action == "type":
-                print(f"⌨ TYPE -> {element} = {input_text}")
-
-                try:
-                    locator = page.get_by_placeholder(element)
-                    locator.fill(input_text or "")
-
-                except:
-                    try:
-                        locator = page.locator("input, textarea").first
-                        locator.fill(input_text or "")
-                    except Exception as e:
-                        print("❌ TYPE FAILED:", e)
-
-            # ---------------- SEARCH ----------------
-            elif action == "search":
-                print(f"🔎 SEARCH -> {element}")
-
-                try:
-                    locator = page.locator("input, textarea").first
-                    locator.fill(input_text or "")
-                    locator.press("Enter")
-                except Exception as e:
-                    print("❌ SEARCH FAILED:", e)
-
-            # ---------------- NAVIGATE ----------------
-            elif action == "navigate":
-                print(f"🌐 NAVIGATE -> {element}")
-                try:
-                    page.goto(element, timeout=60000)
-                except Exception as e:
-                    print("❌ NAVIGATE FAILED:", e)
-
-            # ---------------- SELECT ----------------
-            elif action == "select":
-                print(f"📌 SELECT -> {element}")
-                try:
-                    page.select_option(element, input_text)
-                except Exception as e:
-                    print("❌ SELECT FAILED:", e)
-
-            else:
-                print("⚠ UNKNOWN ACTION:", action)
-
-            results.append({
-                "step_id": step.get("id"),
-                "status": "done"
-            })
-
-        except Exception as e:
-            print("❌ STEP ERROR:", str(e))
-
-            results.append({
-                "step_id": step.get("id"),
-                "status": "failed",
-                "error": str(e)
-            })
-
-    print("\n🔥 WORKER FINISHED\n")
+    # ------------------------------------------------------------------
+    # Build final result summary
+    # ------------------------------------------------------------------
+    result_summary = "\n".join(
+        f"Step {r['step_id']}: {r['result']}" for r in step_results
+    )
+    print(f"\n🏁 WORKER FINISHED — {len(step_results)} steps executed")
 
     return {
         **state,
-        "execution_results": results
+        "worker_history": history,
+        "result": result_summary,
     }

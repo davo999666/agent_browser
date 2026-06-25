@@ -39,13 +39,13 @@ class BrowserWorkflow:
 
         self.app = graph.compile()
 
-    def run(self, goal: str, start_url: str, browser):
+    def run(self, goal: str, start_url: str, browser_lifecycle):
 
         result = self.app.invoke(
-            {   
+            {
                 "goal": goal,
                 "start_url": start_url,
-                "browser": browser,
+                "browser_lifecycle": browser_lifecycle,
                 "page_content": "...",
                 "vector_db": self.vector_db,
             }

@@ -19,7 +19,7 @@ IMPORTANT RULES:
 - Use ONLY information from PAGE DATA
 - Do NOT hallucinate elements
 - Steps must be in correct order
-- Create as many steps as needed (minimum 1, maximum 10)
+- Create 3 steps required to complete the task; the number of steps is not fixed and should depend on the complexity of the goal.
 
 OUTPUT FORMAT:
 

@@ -31,8 +31,12 @@ class BrowserState(TypedDict, total=False):
     # 🎯 final result
     result: Optional[Any]
 
-    # 🌐 runtime browser object (IMPORTANT)
-    browser: Any
+    # 🌐 BrowserLifecycle instance — single source of truth for all browser operations
+    browser_lifecycle: Any
 
     # 📄 current page object (optional but useful)
     page: Any
+
+    # 📜 worker execution history (list of action logs)
+    worker_history: Optional[List[str]]
+

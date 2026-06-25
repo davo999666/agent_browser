@@ -1,19 +1,16 @@
 from typing import Dict, Any
 
-
-
-# keep playwright globally inside workflow
-# p = sync_playwright().start()
-# browser = p.chromium.launch(headless=False)
+from tools.browser_lifecycle import BrowserLifecycle
 
 
 def browser_node(state: Dict[str, Any]) -> Dict[str, Any]:
     url = state["start_url"]
-    browser = state["browser"]
+    browser_lifecycle: BrowserLifecycle = state["browser_lifecycle"]
 
-    page = browser.new_page()
+    page = browser_lifecycle.get_page()
+    if page is None:
+        raise RuntimeError("BrowserLifecycle page is not available.")
 
-    page.goto(url, timeout=60000)
     page.wait_for_selector("a[href]", timeout=60000)
 
     title = page.title()
