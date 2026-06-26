@@ -1,4 +1,5 @@
 from tools.browser_lifecycle import BrowserLifecycle
+from tools.browser_tools import set_browser_lifecycle
 from workflows.browser_workflow import BrowserWorkflow
 
 
@@ -10,9 +11,10 @@ def main():
 
     try:
         browser_lifecycle.start()
+        set_browser_lifecycle(browser_lifecycle)
 
         agent = BrowserWorkflow()
-        agent.run(goal, start_url, browser_lifecycle)
+        agent.run(goal, start_url)
     finally:
         browser_lifecycle.stop()
 

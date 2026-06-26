@@ -5,33 +5,23 @@ class BrowserState(TypedDict, total=False):
     goal: str
     start_url: str
 
-    # 📄 page output from browser
-    title: Optional[str]
+    # title: Optional[str]
     url: Optional[str]
-    page_content: List[Dict[str, Any]]
+    # previous_url: Optional[str]
+    page_content: Dict[str, Any]
 
-    # 🧩 chunked DOM
     chunks: List[Dict[str, Any]]
 
-    # 🔢 vector store
-    vector_db: Any
+    # retrieved_context: List[Dict[str, Any]]
 
-    # 🔍 retrieval results (structured!)
-    retrieved_context: List[Dict[str, Any]]
+    # search_query: Optional[str]
+    # memory_query: Optional[str]
+    # memory_results: List[Dict[str, Any]]
 
-    # 🧠 search query
-    search_query: Optional[str]
-
-    # 🧠 planner output (IMPORTANT: dict, not string)
     plan: Dict[str, Any]
 
-    # 🎯 final result
-    result: Optional[Any]
+    worker_history: List[str]
+    worker_messages: List[Any]  # Full LangChain message objects for LLM conversation
 
-    # 🌐 BrowserLifecycle instance — single source of truth for all browser operations
-    browser_lifecycle: Any
-
-    # 📄 current page object (optional but useful)
-    page: Any
-
-
+    # result: Optional[Any]
+    next_action: str

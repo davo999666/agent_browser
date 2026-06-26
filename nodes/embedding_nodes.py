@@ -1,8 +1,12 @@
 
 
+from vector_store.faiss_db import get_vector_db
+
+
 def embed_node(state):
+    print("==========embed_node=============")
     chunks = state.get("chunks", [])
-    vector_db = state.get("vector_db")
+    vector_db = get_vector_db()
 
     texts = []
     metadatas = []
@@ -18,7 +22,7 @@ def embed_node(state):
             texts.append(text)
             metadatas.append(node)
 
-    if vector_db and texts:
+    if texts:
         vector_db.add_texts(
             texts=texts,
             metadatas=metadatas
@@ -26,5 +30,4 @@ def embed_node(state):
 
     return {
         **state,
-        "vector_db": vector_db,
     }

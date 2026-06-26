@@ -3,11 +3,13 @@ from typing import Dict, Any
 
 from chains.planner_chain import planner_chain, query_chain
 from tools.retriever import retrieve
+from vector_store.faiss_db import get_vector_db
 
 
 def planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    print("==============planner_node================")
     goal = state.get("goal", "")
-    vector_db = state.get("vector_db")  # 👈 your FAISS/Chroma DB
+    vector_db = get_vector_db()
 
     # 🧠 1. LLM decides what to search (simple heuristic or prompt)
     search_query = query_chain.invoke({

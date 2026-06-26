@@ -1,18 +1,19 @@
+"""Agentic worker node: executes ONE action per invocation."""
+
 import json
 import logging
+from collections import Counter
 
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import ToolMessage, AIMessage, HumanMessage
 
 from chains.worker_chain import TOOL_MAP, worker_llm_with_tools
-from llm.model import model
 from prompts.worker_prompt import worker_prompt
-from tools.browser_lifecycle import BrowserLifecycle
-from tools.browser_tools import set_browser_lifecycle
+from tools.browser_tools import _get_page
 
 logger = logging.getLogger(__name__)
 
-# Maximum tool-call iterations per step to prevent infinite loops
-MAX_ITERATIONS_PER_STEP = 20
+# Maximum number of consecutive identical actions before forcing a stop
+MAX_REPEATED_ACTIONS = 3
 
 
 def _execute_tool_call(tool_call: dict) -> ToolMessage:
@@ -33,94 +34,131 @@ def _execute_tool_call(tool_call: dict) -> ToolMessage:
     return ToolMessage(content=str(result), tool_call_id=call_id)
 
 
+def _get_current_url() -> str:
+    """Safely get the current page URL."""
+    try:
+        page = _get_page()
+        return page.url
+    except Exception:
+        return ""
+
+
+def _detect_repetition(history: list) -> bool:
+    """Detect if the last N actions are identical (infinite loop)."""
+    if len(history) < MAX_REPEATED_ACTIONS:
+        return False
+
+    # Get the last MAX_REPEATED_ACTIONS entries
+    last_actions = history[-MAX_REPEATED_ACTIONS:]
+    
+    # Count occurrences of each action
+    action_counts = Counter(last_actions)
+    
+    # If any action appears MAX_REPEATED_ACTIONS times consecutively, it's a loop
+    for action, count in action_counts.items():
+        if count >= MAX_REPEATED_ACTIONS:
+            return True
+    
+    return False
+
+
 def worker_node(state):
-    """Execute plan steps using browser tools until the task is completed."""
-    browser_lifecycle: BrowserLifecycle = state.get("browser_lifecycle")
-    # Wire up BrowserLifecycle so browser_tools can access the page
-    set_browser_lifecycle(browser_lifecycle)
-    # ------------------------------------------------------------------
-    # Parse plan
-    # ------------------------------------------------------------------
+    print("============worker_node==============")
+    """Execute ONE action and return.
+
+    The worker:
+    1. Invokes the LLM with current context and full message history
+    2. If LLM calls a tool → execute it, record in history
+    3. If LLM produces final text → task is complete
+    4. Sets next_action based on:
+       - "browser" if page URL changed (triggers re-extract/chunk/embed)
+       - "worker" if same page (continue loop)
+       - "end" if task is complete or stuck in loop
+
+    Returns:
+        - worker_history: updated history
+        - worker_messages: updated full message list
+        - next_action: routing decision
+        - result: final answer (only if task complete)
+    """
+    goal = state.get("goal", "")
     plan = state.get("plan", {})
     plan_text = str(plan)
-    try:
-        plan_dict = json.loads(plan_text)
-    except (json.JSONDecodeError, TypeError):
-        plan_dict = plan if isinstance(plan, dict) else {}
+    history = list(state.get("worker_history", []))
+    messages = list(state.get("worker_messages", []))
+    url_before = state.get("url", "") or _get_current_url()
 
-    steps = plan_dict.get("steps", [])
-    goal = state.get("goal", "")
-    # ------------------------------------------------------------------
-    # Execute each step
-    # ------------------------------------------------------------------
-    history: list[str] = []  # running log of completed actions
-    step_results: list[dict] = []
-
-    for step in steps:
-        step_id = step.get("id", "?")
-        step_summary = (
-            f"Step {step_id}: action={step.get('action')}, "
-            f"element={step.get('element')}, input={step.get('input')}, "
-            f"reason={step.get('reason')}"
-        )
-        print(f"▶ EXECUTING {step_summary}")
+    # Check for infinite loop before proceeding
+    if _detect_repetition(history):
+        print(f"⚠️ Detected infinite loop! Last {MAX_REPEATED_ACTIONS} actions were identical. Forcing completion.")
+        final_text = "Task incomplete: Agent detected an infinite loop and was forced to stop. Please review the goal and plan."
+        history.append(f"[FINAL - LOOP DETECTED] {final_text}")
         
-        history_text = "\n".join(history) if history else "(no actions yet)"
+        return {
+            "result": final_text,
+            "worker_history": history,
+            "worker_messages": messages,
+            "next_action": "end",
+        }
 
-        # ---- Tool-call loop for this step ----
-        # Build the initial message list from the prompt template so that
-        # system + human messages persist across tool-call rounds.
+    # Build initial prompt if this is the first invocation
+    if not messages:
+        history_text = "\n".join(history) if history else "(no actions yet)"
         prompt_messages = worker_prompt.invoke({
-            "task": goal,
-            "current_step": step_summary,
+            "goal": goal,
+            "plan": plan_text,
             "history": history_text,
         }).to_messages()
+        messages = list(prompt_messages)
 
-        messages = list(prompt_messages)  # mutable copy
+    # Invoke LLM with full message history
+    print(f"\n🔄 Worker deciding next action...")
+    response = worker_llm_with_tools.invoke(messages)
 
-        for iteration in range(1, MAX_ITERATIONS_PER_STEP + 1):
-            # Invoke LLM with full message history (including tools)
-            response = worker_llm_with_tools.invoke(messages)
+    # Add the AI response to message history
+    messages.append(response)
 
-            # Check if the LLM wants to call tools
-            tool_calls = getattr(response, "tool_calls", None) or []
+    # Check if the LLM wants to call tools
+    tool_calls = getattr(response, "tool_calls", None) or []
 
-            if not tool_calls:
-                # LLM produced a final text answer for this step
-                final_text = response.content if hasattr(response, "content") else str(response)
-                print(f"  ✅ Step {step_id} complete: {final_text[:200]}")
-                history.append(f"[Step {step_id}] {final_text}")
-                step_results.append({"step_id": step_id, "result": final_text})
-                break
+    if not tool_calls:
+        # LLM produced a final text answer — task is complete
+        final_text = response.content if hasattr(response, "content") else str(response)
+        print(f"✅ Worker complete: {final_text[:300]}")
+        history.append(f"[FINAL] {final_text}")
 
-            # Append AI response with tool_calls, then execute each tool
-            messages.append(response)
+        return {
+            "result": final_text,
+            "worker_history": history,
+            "worker_messages": messages,
+            "next_action": "end",
+        }
 
-            for tc in tool_calls:
-                print(f"  🔧 Calling {tc['name']}({tc['args']})")
-                tool_msg = _execute_tool_call(tc)
-                print(f"     → {tool_msg.content[:200]}")
-                messages.append(tool_msg)
-                history.append(
-                    f"[Step {step_id}] {tc['name']}({tc['args']}) → {tool_msg.content[:150]}"
-                )
-        else:
-            # Hit iteration limit
-            warning = f"Step {step_id} hit max iterations ({MAX_ITERATIONS_PER_STEP})"
-            print(f"  ⚠️  {warning}")
-            history.append(f"[Step {step_id}] {warning}")
-            step_results.append({"step_id": step_id, "result": warning})
+    # Execute the first tool call only (one action per invocation)
+    tc = tool_calls[0]
+    tool_name = tc["name"]
+    print(f"  🔧 Calling {tool_name}({tc['args']})")
 
-    # ------------------------------------------------------------------
-    # Build final result summary
-    # ------------------------------------------------------------------
-    result_summary = "\n".join(
-        f"Step {r['step_id']}: {r['result']}" for r in step_results
-    )
-    print(f"\n🏁 WORKER FINISHED — {len(step_results)} steps executed")
+    tool_msg = _execute_tool_call(tc)
+    print(f"     → {tool_msg.content[:200]}")
+
+    # Add tool message to conversation history
+    messages.append(tool_msg)
+
+    # Record in human-readable history (with increased truncation limit)
+    history.append(f"{tool_name}({tc['args']}) → {tool_msg.content[:500]}")
+
+    # Check if this browser action caused a page navigation
+    next_action = "worker"  # default: continue on same page
+
+    if tool_name in ("navigate_tool", "click_tool", "go_back_tool", "press_key_tool"):
+        url_after = _get_current_url()
+        if url_after and url_after != url_before:
+            print(f"  📄 Page changed: {url_before} → {url_after}")
+            next_action = "browser"  # trigger re-extract/chunk/embed
 
     return {
-        **state,
         "worker_history": history,
-        "result": result_summary,
+        "worker_messages": messages,
+        "next_action": next_action,
     }

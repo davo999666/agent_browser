@@ -401,10 +401,11 @@ def extract_elements(selector: str) -> str:
     """Extract all elements matching a CSS selector with their text and attributes.
     
     Args:
-        selector: CSS selector to match elements (e.g., 'a', 'button', '.product-item', 'div.card').
+        selector: CSS selector to match elements (e.g., 'a', 'button', '.product-item', 'div.card', 'input').
     
     Returns:
         JSON string containing extracted elements with their text, href (for links), and other attributes.
+        For input elements, includes placeholder, name, type, and value attributes.
     """
     try:
         page = _get_page()
@@ -426,35 +427,120 @@ def extract_elements(selector: str) -> str:
                 text = element.text_content() or ""
                 text = text.strip()[:200]
                 
-                # Get attributes
+                # Get common attributes
                 href = element.get_attribute("href")
                 element_id = element.get_attribute("id")
                 css_class = element.get_attribute("class")
                 
+                # Get input-specific attributes
+                placeholder = element.get_attribute("placeholder")
+                name = element.get_attribute("name")
+                input_type = element.get_attribute("type")
+                
+                # Get value for input elements (skip password fields for safety)
+                value = None
+                if tag in ("input", "textarea", "select"):
+                    try:
+                        if input_type and input_type.lower() == "password":
+                            value = None  # Skip password values for safety
+                        else:
+                            value = element.input_value()
+                    except Exception:
+                        value = element.get_attribute("value")
+                
+                # Get aria-label for accessibility
+                aria_label = element.get_attribute("aria-label")
+                
                 # Check visibility
                 is_visible = element.is_visible()
                 
-                # Only include elements with text or href
-                if text or href:
-                    elements.append({
-                        "index": i,
-                        "tag": tag,
-                        "text": text,
-                        "href": href,
-                        "id": element_id,
-                        "class": css_class,
-                        "visible": is_visible
-                    })
+                # Build element data dict
+                element_data = {
+                    "index": i,
+                    "tag": tag,
+                    "visible": is_visible
+                }
+                
+                # Only include non-empty attributes
+                if text:
+                    element_data["text"] = text
+                if href:
+                    element_data["href"] = href
+                if element_id:
+                    element_data["id"] = element_id
+                if css_class:
+                    element_data["class"] = css_class
+                if placeholder:
+                    element_data["placeholder"] = placeholder
+                if name:
+                    element_data["name"] = name
+                if input_type:
+                    element_data["type"] = input_type
+                if value:
+                    element_data["value"] = value
+                if aria_label:
+                    element_data["aria_label"] = aria_label
+                
+                # Include elements that have any useful attribute
+                # (text, href, placeholder, name, id, type, value, or aria_label)
+                has_useful_attr = any([
+                    text, href, placeholder, name, element_id,
+                    input_type, value, aria_label
+                ])
+                
+                if has_useful_attr:
+                    elements.append(element_data)
             except Exception as e:
                 logger.debug(f"Failed to extract element {i}: {e}")
                 continue
         
         if not elements:
-            return f"No elements with text or href found matching selector: {selector}"
+            return f"No elements with useful attributes found matching selector: {selector}"
         
         return json.dumps(elements, indent=2)
     except Exception as e:
         return f"Error extracting elements with selector '{selector}': {str(e)}"
+
+
+@tool
+def request_memory_search(query: str) -> str:
+    """Search the memory (vector database) for relevant information from previously visited pages.
+    
+    Use this when you need context about page content, elements, or information
+    that was extracted from pages during the browsing session.
+    
+    Args:
+        query: A search query describing what information you're looking for.
+               Example: "login form input fields", "product price information"
+    
+    Returns:
+        JSON string containing relevant chunks from the memory database,
+        or a message if no results are found.
+    """
+    try:
+        from vector_store.faiss_db import get_vector_db
+        from tools.retriever import retrieve
+        
+        vector_db = get_vector_db()
+        results = retrieve(query, vector_db, k=15)
+        
+        if not results:
+            return f"No relevant information found in memory for query: '{query}'"
+        
+        # Format results for the LLM
+        formatted = []
+        for i, result in enumerate(results, 1):
+            text = result.get("text", "")
+            metadata = result.get("metadata", {})
+            formatted.append({
+                "index": i,
+                "text": text,
+                "metadata": metadata
+            })
+        
+        return json.dumps(formatted, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return f"Error searching memory: {str(e)}"
 
 
 # List of all browser tools for easy import
@@ -468,5 +554,6 @@ ALL_BROWSER_TOOLS = [
     press_key_tool,
     get_current_url,
     extract_elements,
+    request_memory_search,
 ]
 
