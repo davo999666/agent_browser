@@ -11,31 +11,32 @@ PAGE DATA:
 {page_data}
 
 TASK:
-1. Understand what is on the page
-2. Decide what is relevant to the goal
-3. Create a step-by-step plan
+1. Understand the page structure and available interactive elements
+2. Create a step-by-step plan to achieve the goal
+3. Each step must map to real elements in PAGE DATA
 
 IMPORTANT RULES:
 - Use ONLY information from PAGE DATA
 - Do NOT hallucinate elements
 - Steps must be in correct order
-- Create 3 steps required to complete the task; the number of steps is not fixed and should depend on the complexity of the goal.
+- Create steps required to complete the task; the number of steps is not fixed and should depend on the complexity of the goal.
 
-OUTPUT FORMAT:
+
+OUTPUT FORMAT (STRICT JSON):
 
 {{
   "steps": [
     {{
       "id": 1,
-      "element": "description",
-      "action": "click | type | search | navigate",
+      "target": "element description from page data",
+      "action": "click | type | search | navigate | scroll | wait | go_back",
       "input": "text or null",
       "reason": "why this step is needed"
     }},
     {{
       "id": 2,
-      "element": "description",
-      "action": "click | type | search | navigate",
+      "target": "element description from page data",
+      "action": "click | type | search | navigate | scroll | wait | go_back",
       "input": "text or null",
       "reason": "why this step is needed"
     }}
@@ -55,13 +56,13 @@ Goal: Create an account
 Query: registration page, signup form, email input, password input, submit button
 
 Goal: Find contact information
-Query: contact page, help page, phone number, email address, contact form
+Query: [contact page, help page, phone number, email address, contact form]
 
 Goal: Search for a product
-Query: search page, search input, category page, product page, filter menu
+Query: [search page, search input, category page, product page, filter menu]
 
 Goal: Apply for a job
-Query: careers page, job listings, job details, apply button, application form, resume upload, submit button
+Query: [careers page, job listings, job details, apply button, application form, resume upload, submit button]
 
 Do NOT repeat the goal.
 Do NOT describe the task.
@@ -69,6 +70,9 @@ Do NOT explain your reasoning.
 
 GOAL:
 {goal}
+                                                
+IMPORTANT RULES:
+- Return ONLY valid JSON array of strings
 
 Return ONLY the short query.
 """)

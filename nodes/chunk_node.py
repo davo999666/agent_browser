@@ -1,3 +1,4 @@
+import json
 from typing import Dict, Any
 
 def chunk_node(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -20,7 +21,11 @@ def chunk_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
         chunks.append(clean_node)
 
+    with open("output/chunks.txt", "w", encoding="utf-8") as f:
+            for i, chunk in enumerate(chunks):
+                f.write(f"\n--- CHUNK {i+1} ---\n")
+                f.write(json.dumps(chunk, ensure_ascii=False) + "\n")
+
     return {
-        **state,
         "chunks": chunks
     }

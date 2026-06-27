@@ -1,7 +1,11 @@
-langgraph
-playwright
-langchain-text-splitters
-langchain_openai
+# Core Dependencies
+langchain
+langchain-core
+langchain-community
+langchain-openai
 langchain-huggingface
 faiss-cpu
-sentence_transformers
+sentence-transformers
+huggingface-hub
+playwright
+openai

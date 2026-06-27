@@ -4,7 +4,7 @@ from workflows.browser_workflow import BrowserWorkflow
 
 
 def main():
-    goal = "Find an apartment for sale with a budget of $50,000."
+    goal = "Find an apartment for sale with a price $50,000."
     start_url = "https://www.list.am/en/"
 
     browser_lifecycle = BrowserLifecycle(url=start_url, headless=False)

@@ -73,64 +73,15 @@ class BrowserWorkflow:
             {
                 "goal": goal,
                 "start_url": start_url,
-                "page_content": {},
             }
         )
-        page = result.get("page_content", {})
-        data = page.get("data", [])
-        chunks = result.get("chunks", [])
-        vector_db = get_vector_db()
-        retrieved = result.get("retrieved_context", [])
-        search_query = result.get("search_query", "")
-        plan = result.get("plan", "")
+   
         worker_history = result.get("worker_history", [])
-        final_result = result.get("result", "")
-
-        # ---------------- OUTPUT JSON ----------------
-        with open("output.json", "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-
-        # ---------------- CHUNKS ----------------
-        with open("chunks.txt", "w", encoding="utf-8") as f:
-            for i, chunk in enumerate(chunks):
-                f.write(f"\n--- CHUNK {i+1} ---\n")
-                f.write(json.dumps(chunk, ensure_ascii=False) + "\n")
-
-        # ---------------- EMBEDDINGS ----------------
-        with open("embeddings.txt", "w", encoding="utf-8") as f:
-        # index_to_docstore_id maps FAISS internal int index -> docstore id
-            for i, docstore_id in vector_db.index_to_docstore_id.items():
-                doc = vector_db.docstore.search(docstore_id)
-                vector = vector_db.index.reconstruct(i)  # numpy array, shape (dim,)
-                f.write(f"\n--- EMBEDDING {i+1} ---\n")
-                f.write("META:\n")
-                f.write(json.dumps(doc.metadata, ensure_ascii=False, indent=2) + "\n\n")
-                f.write("TEXT:\n")
-                f.write(doc.page_content + "\n\n")
-                f.write("VECTOR (first 10 dims):\n")
-                f.write(str(vector[:10].tolist()) + "\n")
-                f.write(f"VECTOR DIM: {len(vector)}\n")
-
-        
-        # ---------------- RETRIEVED ----------------
-        with open("retrieved_context.json", "w", encoding="utf-8") as f:
-            json.dump(retrieved, f, ensure_ascii=False, indent=2)
-
-        # ---------------- QUERY ----------------
-        with open("search_query.txt", "w", encoding="utf-8") as f:
-            f.write(search_query)
-
-        # ---------------- PLAN ----------------
-        with open("plan.txt", "w", encoding="utf-8") as f:
-            f.write(str(plan))
 
         # ---------------- WORKER HISTORY ----------------
-        with open("worker_history.txt", "w", encoding="utf-8") as f:
+        with open("output/worker_history.txt", "w", encoding="utf-8") as f:
             for entry in worker_history:
                 f.write(entry + "\n")
 
-        # ---------------- FINAL RESULT ----------------
-        with open("final_result.txt", "w", encoding="utf-8") as f:
-            f.write(str(final_result))
 
         return result

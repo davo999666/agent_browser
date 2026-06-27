@@ -8,7 +8,7 @@ from langchain_core.messages import ToolMessage, AIMessage, HumanMessage
 
 from chains.worker_chain import TOOL_MAP, worker_llm_with_tools
 from prompts.worker_prompt import worker_prompt
-from tools.browser_tools import _get_page
+from tools.browser_tools import _get_page, request_memory_search
 
 logger = logging.getLogger(__name__)
 
@@ -64,23 +64,6 @@ def _detect_repetition(history: list) -> bool:
 
 def worker_node(state):
     print("============worker_node==============")
-    """Execute ONE action and return.
-
-    The worker:
-    1. Invokes the LLM with current context and full message history
-    2. If LLM calls a tool → execute it, record in history
-    3. If LLM produces final text → task is complete
-    4. Sets next_action based on:
-       - "browser" if page URL changed (triggers re-extract/chunk/embed)
-       - "worker" if same page (continue loop)
-       - "end" if task is complete or stuck in loop
-
-    Returns:
-        - worker_history: updated history
-        - worker_messages: updated full message list
-        - next_action: routing decision
-        - result: final answer (only if task complete)
-    """
     goal = state.get("goal", "")
     plan = state.get("plan", {})
     plan_text = str(plan)
@@ -113,7 +96,17 @@ def worker_node(state):
 
     # Invoke LLM with full message history
     print(f"\n🔄 Worker deciding next action...")
+    
     response = worker_llm_with_tools.invoke(messages)
+    with open("output/llm_log.txt", "w", encoding="utf-8") as f:
+        f.write("===== MESSAGES =====\n\n")
+        for message in messages:
+            f.write(f"{message.type.upper()}:\n")
+            f.write(message.content)
+            f.write("\n\n")
+
+        f.write("\n===== RESPONSE =====\n\n")
+        f.write(response.content)
 
     # Add the AI response to message history
     messages.append(response)
@@ -123,12 +116,11 @@ def worker_node(state):
 
     if not tool_calls:
         # LLM produced a final text answer — task is complete
-        final_text = response.content if hasattr(response, "content") else str(response)
-        print(f"✅ Worker complete: {final_text[:300]}")
+        final_text = str(response)
+        print(f"✅ Worker complete: {final_text}")
         history.append(f"[FINAL] {final_text}")
 
         return {
-            "result": final_text,
             "worker_history": history,
             "worker_messages": messages,
             "next_action": "end",
@@ -140,7 +132,7 @@ def worker_node(state):
     print(f"  🔧 Calling {tool_name}({tc['args']})")
 
     tool_msg = _execute_tool_call(tc)
-    print(f"     → {tool_msg.content[:200]}")
+    print(f"     → {tool_msg.content}")
 
     # Add tool message to conversation history
     messages.append(tool_msg)
@@ -156,6 +148,19 @@ def worker_node(state):
         if url_after and url_after != url_before:
             print(f"  📄 Page changed: {url_before} → {url_after}")
             next_action = "browser"  # trigger re-extract/chunk/embed
+            
+            # Automatically search memory for relevant information from the new page
+            print(f"  🔍 Auto-searching memory for new page context...")
+            memory_query = goal if goal else url_after
+            memory_result = request_memory_search.invoke({"query": memory_query})
+            print(f"     → Memory search result: {str(memory_result)[:200]}")
+            
+            # Add memory search results to conversation history
+            memory_msg = HumanMessage(
+                content=f"[AUTO MEMORY SEARCH - New Page: {url_after}]\n{memory_result}"
+            )
+            messages.append(memory_msg)
+            history.append(f"[AUTO MEMORY SEARCH] query='{memory_query}' → {str(memory_result)[:300]}")
 
     return {
         "worker_history": history,

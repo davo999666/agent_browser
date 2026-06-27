@@ -17,41 +17,44 @@ BROWSER TOOLS (interact with the current page):
 - press_key_tool(key): Press a keyboard key
 - get_current_url(): Get current URL and title
 - extract_elements(css_selector): Extract elements matching a CSS selector
+- request_memory_search,
 
-MEMORY TOOLS (retrieve information from previously visited pages):
-- request_memory_search(query): Search the vector database for relevant chunks from page content
+MEMORY TOOLS:
+- request_memory_search(query): Search vector DB page chunks.
 
-ELEMENT METADATA KEYS: tag, text, class, href, placeholder, name, role, id
-ELEMENT SELECTION PRIORITY: id > role+text > href > name > placeholder > text > class > tag
+RULE:
+- New URL (href) = new page data added to memory.
+- Memory always updates with latest pages.
+- Use it to retrieve past + current stored page info.
 
-CRITICAL RULES:
-1. Execute ONE action at a time
-2. Use the most specific metadata available (prefer id over text)
-3. If an action fails, try different metadata — do NOT repeat the same failing action
-4. Use extract_elements to discover elements when unsure
-5. Use request_memory_search when you need context about page content or elements from previously visited pages
-6. When the task is COMPLETE, respond with a final summary (no tool calls)
-7. Do NOT hallucinate elements — only interact with elements that exist on the page
-8. NEVER repeat the exact same tool call with the same arguments — if you already extracted elements with a selector, use the results or try a DIFFERENT selector
-9. If you find yourself stuck or unable to progress, provide a final summary explaining what you accomplished and what blocked you
-10. After extracting elements, analyze the results and decide your next action based on what you found — do not re-extract the same elements"""
+Element metadata: id, role, text, href, name, placeholder, class, tag.
+Selection priority: id > role+text > href > name > placeholder > text > class > tag.
+
+Rules:
+1. Perform ONE action per step.
+2. Never invent elements.
+3. If a tool fails, try different metadata instead of repeating.
+4. Use extract_elements if the needed element is unknown.
+5. Use request_memory_search whenever information from previous pages could help.
+6. Never repeat the same tool call with identical arguments.
+7. When the goal is complete or no further progress is possible, return a final summary without tool calls."""
     ),
     (
         "human",
-        """GOAL: {goal}
+        """GOAL:
+{goal}
 
-PLAN: {plan}
+PLAN:
+{plan}
 
-HISTORY OF ACTIONS:
+ACTION HISTORY:
 {history}
 
-Decide your next action:
-- If you need to interact with the browser → call a browser tool
-- If you need information from memory → call request_memory_search
-- If the task is complete → provide a final summary (no tool calls)
+Choose the next step:
+- Browser interaction → browser tool.
+- Need previous page information → request_memory_search.
+- Task finished or blocked → final summary.
 
-IMPORTANT: Review your action history above. Do NOT repeat actions you've already taken. If you've already extracted elements, use that information to decide your next step.
-
-What is your next action?"""
+Do not repeat previous actions."""
     ),
 ])
